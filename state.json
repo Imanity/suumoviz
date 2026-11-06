@@ -195,8 +195,8 @@
     "used_house:13300": 4,
     "used_house:13363": 5
   },
-  "cooldown_until": "2026-11-08T00:00:00+09:00",
-  "cooldown_reason": "manual_test",
+  "cooldown_until": null,
+  "cooldown_reason": null,
   "blocks": [],
   "robots_sha256": "9303fdf4880f9cf93f822cdd28c2064faf18b4ed71d80ecb6589882dc08bfbbd",
   "last_run": {
