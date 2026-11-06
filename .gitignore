@@ -1,0 +1,7 @@
+node_modules/
+dist/
+dist-local/
+# private data for local development (suumoviz build --out public/data); never commit
+public/data/
+*.local
+.env*
