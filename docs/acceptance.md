@@ -77,15 +77,16 @@
 - [x] Python 编码、浏览器解码使用同一密钥，测试中有跨语言样例；
 - [x] `suumoviz build` 只输出 `summary.dat`（编码），其中没有单条房源；
 - [x] 网页能切换 4 个类别和“总价均价 / 单价均价”，地图圆点颜色 = 均价、大小 = 在售套数，排行与地图联动；手机宽度无横向滚动；控制台无错误；
-- [ ] 私有仓库 `Imanity/suumoviz-data` 的 Daily crawl 已停用，迁移后不再有两边同时抓取；
-- [ ] 公开仓库 `data` 分支包含私有仓库的全部历史提交（逐个重放），所有版本的 CSV 都是编码格式，没有明文；
-- [ ] Pages workflow 在 GitHub 上运行成功，线上页面显示与本地一致，`dist/` 检查通过；
+- [x] 私有仓库 `Imanity/suumoviz-data` 的 Daily crawl 已停用，迁移后不再有两边同时抓取；
+- [x] 公开仓库 `data` 分支包含私有仓库的全部历史提交（逐个重放），所有版本的 CSV 都是编码格式，没有明文；
+- [x] Pages workflow 在 GitHub 上运行成功，线上页面显示与本地一致，`dist/` 检查通过；
 - [ ] 公开仓库的 Daily crawl 首次定时运行成功：提交 `data` 分支并重新发布 Pages。
 
 ## 验收记录
 
 | 日期 | 步骤 | 结果 | 备注 |
 |---|---|---|---|
+| 2026-11-19 | 8 | 部分通过（待公开仓库首次定时运行） | 本地：`pytest` 152 项、`ruff check`、`ruff format --check`、vitest 8 项、`npm run build` 通过；在 `data/`、fixture、`dist/data` 中搜索“東京都”“世田谷”“listing_id”“suumo.jp”等原文均无命中。迁移：私有仓库 Daily crawl 在 11-19 运行（44428900334）后停用；私有 `data` 分支 16 个提交逐个重放到公开仓库 `data` 分支（每个文件校验解码后与原内容一致），再加 README 提交，分支头 `c0560ae`；历史中 101 个数据文件版本全部为编码格式。`main` 推送到 `a52718e`，CI 运行 44472099300 与 Pages 运行 44472099376 成功。线上 https://imanity.github.io/suumoviz/ 显示“数据截至 2026-11-19”，中古マンション 49 个区域，全东京在售 37,780 套、均价 1億451万；`data/summary.dat` 首行为 `#suumoviz-obf/1`，旧的 `data/meta.json` 等返回 404；控制台无错误。公开仓库的 Daily crawl、Canary、CI、Pages 均为 active，首次定时运行在 11-20 |
 | 2026-11-07 | 6 | 通过 | 仓库更名为 `Imanity/suumoviz-data`；新建公开仓库 `Imanity/suumoviz`（提交 2787455），Pages workflow 运行 42312813797 成功，地址 https://imanity.github.io/suumoviz/。`site` 分支由 “Publish site data” 运行 42311143433 生成。前端 vitest 11 项通过、`tsc` 通过。本地预览（11-07 槽位 5 真实数据，8,672 条）用无头 Chrome 检查：桌面 1400×900 与手机 390×844 截图正常，手机无横向溢出，点击町丁目列出房源并切换趋势区域，价格 5,000–8,000 万筛选后 1,562 套、315 个町丁目，切换类别正常，无控制台错误。线上检查：未登录只见登录框；错误 Token 显示“Token 无效或已过期”；正确 Token 读到 `site` 分支（新築マンション 111 套）；Token 只在 sessionStorage；请求只发往 imanity.github.io、api.github.com、cyberjapandata.gsi.go.jp；`/suumoviz/data/meta.json` 等返回 404 |
 | 2026-11-07 | 5 | 通过 | GitHub CI 运行 42309676787（提交 4593e30）成功。`pytest` 137 项通过，`ruff check`、`ruff format --check` 通过。坐标数据：位置参照情報 东京都 19.0b（令和 7 年），5,390 个町丁目、62 个区市町村。用 2026-11-07 槽位 5 的真实数据（8,672 条）：`chome` 精度 100%（含“大字箱根ケ崎”“3-805番14他(地番)”“以下未定”等写法）；在副本上重新合并后全东京统计行 8 行（4 类 × 2 范围）；`suumoviz build` 输出 9 个文件共 1.3MB，最大 `listings/used_condo.json` 788KB（5,501 条），按全量 3.7 万条估算约 7MB。wheel 中包含 `geodata/tokyo_chome.csv` |
 | 2026-11-07 | 4 | 部分通过（待定时运行） | Canary 运行 42292874966：GitHub runner 上 6 个请求全部 200，无拦截。手动触发 Daily 运行 42293033032（`max_pages=5`）：10 个请求，合并 111 条，`data` 分支提交 3379982（作者 github-actions[bot]），artifact `snapshot-42293033032` 保留至 11-13。冷却测试：在 `data` 分支写入测试冷却（9cab7b6）后触发 Daily 运行 42293362244，日志为 “skip: cooling down …”，无请求、无提交；随后撤销（2d94631）。首次定时运行：2026-11-08 03:17 JST（槽位 6） |
