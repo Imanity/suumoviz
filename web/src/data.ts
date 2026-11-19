@@ -199,28 +199,41 @@ export function levelForZoom(zoom: number): Level {
   return zoom >= LEVEL_ZOOMS.chome ? 'chome' : zoom >= LEVEL_ZOOMS.town ? 'town' : 'city'
 }
 
-/**
- * Up to `bins - 1` ascending, distinct thresholds splitting `values` into equal-count
- * bins (a value v falls in bin i when breaks[i-1] <= v < breaks[i]).
- */
-export function quantileBreaks(values: number[], bins: number): number[] {
-  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b)
-  if (sorted.length === 0 || bins < 2) return []
-  const breaks: number[] = []
-  for (let i = 1; i < bins; i++) {
-    const value = sorted[Math.min(sorted.length - 1, Math.floor((i * sorted.length) / bins))]
-    if (value > sorted[0] && (breaks.length === 0 || value > breaks[breaks.length - 1])) {
-      breaks.push(value)
-    }
-  }
-  return breaks
+export type ScaleMode = 'quantile' | 'linear'
+
+export interface ColorStop {
+  value: number
+  index: number // position on the color ramp, 0 … count - 1
 }
 
-/** Index of the bin `value` falls in (see quantileBreaks). */
-export function binIndex(value: number, breaks: number[]): number {
-  let i = 0
-  while (i < breaks.length && value >= breaks[i]) i++
-  return i
+function quantile(sorted: number[], p: number): number {
+  const i = p * (sorted.length - 1)
+  const lo = Math.floor(i)
+  const hi = Math.ceil(i)
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo)
+}
+
+/**
+ * Where the `count` colors of a continuous ramp sit, ascending and distinct (colors in
+ * between are interpolated):
+ *
+ * - `quantile`: at evenly spaced quantiles, so every color covers as many areas;
+ * - `linear`: evenly spaced in value from the 2nd to the 98th percentile (values beyond
+ *   take the end colors), so equal value steps look equally different.
+ */
+export function colorStops(values: number[], count: number, mode: ScaleMode): ColorStop[] {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b)
+  if (sorted.length === 0) return []
+  if (count < 2) return [{ value: sorted[0], index: 0 }]
+  const lo = quantile(sorted, mode === 'quantile' ? 0 : 0.02)
+  const hi = quantile(sorted, mode === 'quantile' ? 1 : 0.98)
+  const stops: ColorStop[] = []
+  for (let index = 0; index < count; index++) {
+    const t = index / (count - 1)
+    const value = mode === 'quantile' ? quantile(sorted, t) : lo + (hi - lo) * t
+    if (stops.length === 0 || value > stops[stops.length - 1].value) stops.push({ value, index })
+  }
+  return stops
 }
 
 export interface Ranked {

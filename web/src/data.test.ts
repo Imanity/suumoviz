@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { decode, MAGIC } from './codec'
 import { niceTicks } from './components/TrendChart'
 import {
-  binIndex,
+  colorStops,
   levelForZoom,
   levelOf,
   lineage,
@@ -13,7 +13,6 @@ import {
   parentOf,
   parseDay,
   parseIndex,
-  quantileBreaks,
   ranked,
 } from './data'
 import {
@@ -227,12 +226,30 @@ describe('boundaries', () => {
   })
 })
 
-describe('bins, ticks and formats', () => {
-  it('splits values into equal-count bins', () => {
-    expect(quantileBreaks([1, 2, 3, 4, 5, 6, 7, 8], 4)).toEqual([3, 5, 7])
-    expect(quantileBreaks([5, 5, 5], 4)).toEqual([])
-    expect(quantileBreaks([], 4)).toEqual([])
-    expect([0, 3, 4, 7, 9].map((v) => binIndex(v, [3, 5, 7]))).toEqual([0, 1, 1, 3, 3])
+describe('color scale, ticks and formats', () => {
+  it('places the ramp colors at quantiles', () => {
+    expect(colorStops([9, 1, 5, 3, 7], 3, 'quantile')).toEqual([
+      { value: 1, index: 0 },
+      { value: 5, index: 1 },
+      { value: 9, index: 2 },
+    ])
+    // repeated values: a color is skipped rather than given the same value twice
+    expect(colorStops([1, 1, 1, 1, 9], 3, 'quantile')).toEqual([
+      { value: 1, index: 0 },
+      { value: 9, index: 2 },
+    ])
+    expect(colorStops([5, 5], 3, 'quantile')).toEqual([{ value: 5, index: 0 }])
+    expect(colorStops([], 3, 'quantile')).toEqual([])
+  })
+
+  it('places the ramp colors evenly between the 2nd and 98th percentiles', () => {
+    const values = Array.from({ length: 101 }, (_, i) => i) // 0 … 100
+    expect(colorStops(values, 3, 'linear')).toEqual([
+      { value: 2, index: 0 },
+      { value: 50, index: 1 },
+      { value: 98, index: 2 },
+    ])
+    expect(colorStops([...values, 10_000], 3, 'linear')[2].value).toBeLessThan(101) // outlier clipped
   })
 
   it('picks round axis ticks', () => {

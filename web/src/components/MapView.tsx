@@ -10,7 +10,17 @@ import {
 } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useEffect, useRef, useState } from 'react'
-import { type DayTable, type Level, LEVEL_LABELS, LEVELS, levelOf, type Metric, metricValue } from '../data'
+import {
+  type ColorStop,
+  type DayTable,
+  type Level,
+  LEVEL_LABELS,
+  LEVELS,
+  levelOf,
+  type Metric,
+  metricValue,
+  type ScaleMode,
+} from '../data'
 import { formatCount, formatMetric, formatMetricShort, metricUnit } from '../format'
 import { type Areas, type BBox, displayName } from '../geo'
 
@@ -37,19 +47,20 @@ const STYLE: StyleSpecification = {
   layers: [{ id: 'gsi', type: 'raster', source: 'gsi' }],
 }
 
-/** Colors for `bins` bins, spread over the ramp. */
-export function binColors(bins: number): string[] {
-  if (bins <= 1) return [RAMP[3]]
-  return Array.from({ length: bins }, (_, k) => RAMP[Math.round((k * (RAMP.length - 1)) / (bins - 1))])
-}
-
-function fillColor(breaks: number[]): ExpressionSpecification {
-  const colors = binColors(breaks.length + 1)
-  const value: ExpressionSpecification = ['to-number', ['feature-state', 'v'], -1]
-  const step: unknown[] = ['step', value, colors[0]]
-  breaks.forEach((b, i) => step.push(b, colors[i + 1]))
-  // too few listings or none: no fill, the base map shows through
-  return ['case', ['>=', value, 0], breaks.length ? (step as ExpressionSpecification) : colors[0], NONE]
+/** A continuous fill: the ramp's colors at the stops, interpolated in Lab between them. */
+function fillColor(stops: ColorStop[]): ExpressionSpecification {
+  // feature state is null for areas without a row: coalesce first (to-number(null) is 0)
+  const value: ExpressionSpecification = ['to-number', ['coalesce', ['feature-state', 'v'], -1]]
+  let color: ExpressionSpecification | string = RAMP[3]
+  if (stops.length > 1) {
+    const ramp: unknown[] = ['interpolate-lab', ['linear'], value]
+    for (const stop of stops) ramp.push(stop.value, RAMP[stop.index])
+    color = ramp as ExpressionSpecification
+  } else if (stops.length === 1) {
+    color = RAMP[stops[0].index]
+  }
+  // too few listings or none (-1): no fill, the base map shows through
+  return ['case', ['>=', value, 0], color, NONE]
 }
 
 const flag = (name: string): ExpressionSpecification => ['boolean', ['feature-state', name], false]
@@ -69,7 +80,9 @@ interface Props {
   level: Level
   table: DayTable | null
   metric: Metric
-  breaks: number[]
+  stops: ColorStop[]
+  scale: ScaleMode
+  onScale: (scale: ScaleMode) => void
   minSample: number
   selected: string | null
   focus: FocusRequest | null
@@ -77,7 +90,8 @@ interface Props {
   onView: (view: MapViewState) => void
 }
 
-export function MapView({ areas, level, table, metric, breaks, minSample, selected, focus, onSelect, onView }: Props) {
+export function MapView(props: Props) {
+  const { areas, level, table, metric, stops, minSample, selected, focus, onSelect, onView } = props
   const container = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const [ready, setReady] = useState(false)
@@ -274,8 +288,8 @@ export function MapView({ areas, level, table, metric, breaks, minSample, select
 
   useEffect(() => {
     if (!ready) return
-    for (const lv of LEVELS) mapRef.current?.setPaintProperty(`fill-${lv}`, 'fill-color', fillColor(breaks))
-  }, [ready, breaks])
+    for (const lv of LEVELS) mapRef.current?.setPaintProperty(`fill-${lv}`, 'fill-color', fillColor(stops))
+  }, [ready, stops])
 
   useEffect(() => {
     const map = mapRef.current
@@ -293,50 +307,85 @@ export function MapView({ areas, level, table, metric, breaks, minSample, select
   return (
     <>
       <div ref={container} className="map" role="region" aria-label="区域价格地图" />
-      <Legend metric={metric} level={level} breaks={breaks} minSample={minSample} />
+      <Legend
+        metric={metric}
+        level={level}
+        stops={stops}
+        scale={props.scale}
+        onScale={props.onScale}
+        minSample={minSample}
+      />
     </>
   )
 }
 
-function Legend({ metric, level, breaks, minSample }: { metric: Metric; level: Level; breaks: number[]; minSample: number }) {
-  const colors = binColors(breaks.length + 1)
+const GRADIENT = RAMP.map((c, i) => `${c} ${((i / (RAMP.length - 1)) * 100).toFixed(1)}%`).join(', ')
+const LABELLED = [0, 2, 4, 6] // ramp positions that get a value label
+
+interface LegendProps {
+  metric: Metric
+  level: Level
+  stops: ColorStop[]
+  scale: ScaleMode
+  onScale: (scale: ScaleMode) => void
+  minSample: number
+}
+
+const SCALES: [ScaleMode, string, string][] = [
+  ['quantile', '按分位', '颜色按区域排名均匀分布：每一段颜色覆盖同样多的区域'],
+  ['linear', '按数值', '颜色与数值成正比（两端截在第 2 和第 98 百分位）'],
+]
+
+function Legend({ metric, level, stops, scale, onScale, minSample }: LegendProps) {
   const fmt = (v: number) => formatMetricShort(metric, v)
-  const labels = colors.map((_, i) => {
-    if (breaks.length === 0) return '全部'
-    if (i === 0) return `< ${fmt(breaks[0])}`
-    if (i === breaks.length) return `≥ ${fmt(breaks[i - 1])}`
-    return `${fmt(breaks[i - 1])}–${fmt(breaks[i])}`
-  })
+  const last = RAMP.length - 1
+  const ticks = stops
+    .filter((s, i) => LABELLED.includes(s.index) || i === stops.length - 1)
+    .map((s) => {
+      // linear: the ends are clipped at the 2nd and 98th percentiles
+      const clipped = scale === 'linear' && (s.index === 0 || s.index === last)
+      const text = clipped ? `${s.index === 0 ? '≤' : '≥'}${fmt(s.value)}` : fmt(s.value)
+      return { position: s.index / last, text }
+    })
   return (
     <div className="legend" aria-label="图例">
       <div className="legend-title">
         {metric.short}（{metricUnit(metric)}）· {LEVEL_LABELS[level]}
       </div>
-      {/* compact strip on narrow screens */}
-      <div className="legend-strip" aria-hidden="true">
-        <div className="legend-ramp">
-          {colors.map((color, i) => (
-            <span key={color + i} style={{ background: color }} />
+      <div className="legend-bar" style={{ background: `linear-gradient(to right, ${GRADIENT})` }} />
+      <div className="legend-ticks">
+        {ticks.map((t) => (
+          <span
+            key={t.position}
+            style={{ left: `${t.position * 100}%` }}
+            className={t.position === 0 ? 'start' : t.position === 1 ? 'end' : ''}
+          >
+            {t.text}
+          </span>
+        ))}
+      </div>
+      <div className="legend-row">
+        <span className="swatch empty" />
+        {metric.kind === 'count' ? '无在售房源' : `无在售房源或少于 ${minSample} 套`}
+      </div>
+      <div className="legend-row">
+        <span className="muted-ink">色阶</span>
+        <div className="segmented tiny" role="group" aria-label="色阶">
+          {SCALES.map(([mode, label, title]) => (
+            <button
+              key={mode}
+              type="button"
+              title={title}
+              className={scale === mode ? 'selected' : ''}
+              aria-pressed={scale === mode}
+              onClick={() => onScale(mode)}
+            >
+              {label}
+            </button>
           ))}
         </div>
-        <div className="legend-ends">
-          <span>{labels[0]}</span>
-          <span>{labels[labels.length - 1]}</span>
-        </div>
       </div>
-      <ul>
-        {colors.map((color, i) => (
-          <li key={color + i}>
-            <span className="swatch" style={{ background: color }} />
-            {labels[i]}
-          </li>
-        ))}
-        <li>
-          <span className="swatch empty" />
-          {metric.kind === 'count' ? '无在售房源' : `无在售房源或少于 ${minSample} 套`}
-        </li>
-      </ul>
-      <div className="legend-note">分档按最新一天的数据等分，切换日期时保持不变</div>
+      <div className="legend-note">色阶按最新一天的数据确定，切换日期时不变</div>
     </div>
   )
 }

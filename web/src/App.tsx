@@ -18,8 +18,9 @@ import {
   type MetricKey,
   METRICS,
   parentOf,
-  quantileBreaks,
+  colorStops,
   ranked,
+  type ScaleMode,
 } from './data'
 import { formatDay } from './format'
 import { type Areas, loadAreas } from './geo'
@@ -100,6 +101,7 @@ function Explorer({ index, areas }: { index: Index; areas: Areas }) {
   const [selected, setSelected] = useState<string | null>(null)
   const [view, setView] = useState<MapViewState | null>(null)
   const [focus, setFocus] = useState<FocusRequest | null>(null)
+  const [scale, setScale] = useState<ScaleMode>('quantile')
 
   const category = index.categories.find((c) => c.key === categoryKey) ?? index.categories[0]
   const metric = METRICS.find((m) => m.key === metricKey) ?? METRICS[0]
@@ -116,12 +118,12 @@ function Explorer({ index, areas }: { index: Index; areas: Areas }) {
     () => loadHistory(BASE, category.key, selected ?? ''),
   )
 
-  // bins from the latest day, so colors keep their meaning along the timeline
-  const breaks = useMemo(() => {
+  // the scale comes from the latest day, so colors keep their meaning along the timeline
+  const stops = useMemo(() => {
     if (!latest.data) return []
     const values = ranked(latest.data, level, metric.key).flatMap((r) => (r.value === null ? [] : [r.value]))
-    return quantileBreaks(values, RAMP.length)
-  }, [latest.data, level, metric.key])
+    return colorStops(values, RAMP.length, scale)
+  }, [latest.data, level, metric.key, scale])
 
   const rows = useMemo(() => {
     if (!day.data) return []
@@ -316,7 +318,9 @@ function Explorer({ index, areas }: { index: Index; areas: Areas }) {
             level={level}
             table={day.data}
             metric={metric}
-            breaks={breaks}
+            stops={stops}
+            scale={scale}
+            onScale={setScale}
             minSample={index.minSample}
             selected={selected}
             focus={focus}
