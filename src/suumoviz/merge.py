@@ -19,6 +19,7 @@ from suumoviz.categories import CATEGORIES, PREFECTURE_AREA
 from suumoviz.quality import Quality, check_quality
 from suumoviz.rotation import CYCLE_DAYS
 from suumoviz.store import (
+    ARCHIVE_FIELDS,
     COUNT_FIELDS,
     EVENT_FIELDS,
     LISTING_DATA_FIELDS,
@@ -26,6 +27,7 @@ from suumoviz.store import (
     RUN_FIELDS,
     STAT_FIELDS,
     Row,
+    archive_path,
     counts_path,
     events_path,
     listings_path,
@@ -38,7 +40,7 @@ from suumoviz.store import (
 
 DELIST_AFTER_DAYS = 2 * CYCLE_DAYS + 1  # missed two full cycles
 MIN_COMPLETED_RUNS = 2 * CYCLE_DAYS - 1  # completed runs needed in that window
-INACTIVE_RETENTION_DAYS = 90  # delisted rows are pruned from listings/ after this
+INACTIVE_RETENTION_DAYS = 90  # delisted rows move from listings/ to archive/ after this
 
 
 class MergeError(Exception):
@@ -161,12 +163,21 @@ def _delist(table: dict[tuple[str, str], Row], runs: list[Row], day: str) -> lis
     return events
 
 
-def _prune(table: dict[tuple[str, str], Row], day: str) -> None:
+def _prune(table: dict[tuple[str, str], Row], day: str) -> list[Row]:
+    """Remove long-delisted rows from ``table`` and return them (for archive/)."""
     cutoff = (date.fromisoformat(day) - timedelta(days=INACTIVE_RETENTION_DAYS)).isoformat()
-    for key in [
-        k for k, r in table.items() if r["status"] == "inactive" and r["delisted_on"] < cutoff
-    ]:
-        del table[key]
+    keys = [k for k, r in table.items() if r["status"] == "inactive" and r["delisted_on"] < cutoff]
+    return [table.pop(k) for k in sorted(keys)]
+
+
+def _archive(data_dir: Path, day: str, pruned: list[Row]) -> None:
+    if not pruned:
+        return
+    path = archive_path(data_dir, day)
+    existing = read_rows(path)
+    seen = {(r["category"], r["listing_id"], r["delisted_on"]) for r in existing}
+    fresh = [r for r in pruned if (r["category"], r["listing_id"], r["delisted_on"]) not in seen]
+    write_rows(path, ARCHIVE_FIELDS, existing + fresh)
 
 
 def _quartiles(values: list[float]) -> tuple[int, int, int]:
@@ -236,7 +247,7 @@ def merge_day(data_dir: Path, snapshot_dir: Path) -> MergeResult:
     if quality.ok:
         events = _apply_sightings(table, sightings, day)
         events += _delist(table, runs, day)
-        _prune(table, day)
+        _archive(data_dir, day, _prune(table, day))
         _save_listings(data_dir, table)
         existing = read_rows(events_path(data_dir, day))
         seen = {(e["date"], e["listing_id"], e["type"]) for e in existing}

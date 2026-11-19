@@ -272,6 +272,13 @@ def test_inactive_rows_pruned_after_retention(tmp_path: Path) -> None:
     merge_day(data, write_snapshot(work, later, [listing("B")]))
     assert "A" not in table(data)
     assert any(e["type"] == "delisted" for e in events(data, D0 + timedelta(days=15)))
+    archived = read_rows(data / "archive" / f"{later.year}.csv")
+    assert [(r["listing_id"], r["first_seen"], r["last_seen"]) for r in archived] == [
+        ("A", D0.isoformat(), D0.isoformat())
+    ]
+    assert archived[0]["address"] == "東京都世田谷区三宿1"
+    merge_day(data, write_snapshot(work, later, [listing("B")]))  # re-merge: no duplicate
+    assert len(read_rows(data / "archive" / f"{later.year}.csv")) == 1
 
 
 def test_crawl_then_merge_rejects_truncated_pages(tmp_path: Path) -> None:

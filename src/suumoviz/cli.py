@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     _common(daily)
     _crawl_args(daily)
 
-    build = sub.add_parser("build", help="write the web's area summary from the data tables")
+    build = sub.add_parser("build", help="write the web's per-day area statistics")
     build.add_argument("--data-dir", type=Path, default=Path("data"))
     build.add_argument("--out", type=Path, default=Path("web/public/data"))
 

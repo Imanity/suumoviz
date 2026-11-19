@@ -1,7 +1,8 @@
 import {
   AttributionControl,
   type ExpressionSpecification,
-  type GeoJSONSource,
+  type MapGeoJSONFeature,
+  type PointLike,
   Map as MapLibreMap,
   NavigationControl,
   Popup,
@@ -9,17 +10,18 @@ import {
 } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useEffect, useRef, useState } from 'react'
-import { formatCount, formatMan, formatManShort, formatUnit } from '../format'
-import { type AreaValue, type Metric, metricValue, MIN_SAMPLE } from '../summary'
+import { type DayTable, type Level, LEVEL_LABELS, LEVELS, levelOf, type Metric, metricValue } from '../data'
+import { formatCount, formatMetric, formatMetricShort, metricUnit } from '../format'
+import { type Areas, type BBox, displayName } from '../geo'
 
-// Sequential blue (one hue, light → dark). Kept off the lightest steps so small values
-// still read on the pale base map.
-export const RAMP = ['#9ec5f4', '#6da7ec', '#3987e5', '#2a78d6', '#256abf', '#184f95', '#0d366b']
-export const MISSING = '#898781'
+// Sequential blue, light → dark (steps 100…700): a choropleth may use the full range.
+export const RAMP = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b']
+const FEW = '#b4b3ab' // listings on sale, too few behind a price
+const NONE = 'rgba(0,0,0,0)'
 
 const GSI_ATTRIBUTION =
   '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener noreferrer">地理院タイル</a>'
-const GEO_ATTRIBUTION = '位置参照情報 国土交通省'
+const BOUNDARY_ATTRIBUTION = '境界：e-Stat 国勢調査 2020 小地域'
 
 const STYLE: StyleSpecification = {
   version: 8,
@@ -36,70 +38,60 @@ const STYLE: StyleSpecification = {
   layers: [{ id: 'gsi', type: 'raster', source: 'gsi' }],
 }
 
-// circle size = listings on sale (square root, so area tracks the count); `zoom` may only
-// appear in a top-level interpolate, so the selection ring gets its own expression
-function radius(extra = 0): ExpressionSpecification {
-  return [
-    'interpolate', ['linear'], ['zoom'],
-    9, ['+', 4 + extra, ['*', 0.22, ['sqrt', ['get', 'count']]]],
-    13, ['+', 8 + extra, ['*', 0.6, ['sqrt', ['get', 'count']]]],
-  ]
-}
-
 /** Colors for `bins` bins, spread over the ramp. */
 export function binColors(bins: number): string[] {
   if (bins <= 1) return [RAMP[3]]
   return Array.from({ length: bins }, (_, k) => RAMP[Math.round((k * (RAMP.length - 1)) / (bins - 1))])
 }
 
-function colorExpression(breaks: number[]): ExpressionSpecification {
+function fillColor(breaks: number[]): ExpressionSpecification {
   const colors = binColors(breaks.length + 1)
-  const step: unknown[] = ['step', ['get', 'v'], colors[0]]
+  const value: ExpressionSpecification = ['to-number', ['feature-state', 'v'], -1]
+  const step: unknown[] = ['step', value, colors[0]]
   breaks.forEach((b, i) => step.push(b, colors[i + 1]))
   return [
     'case',
-    ['<', ['get', 'v'], 0],
-    MISSING,
+    ['>=', value, 0],
     breaks.length ? (step as ExpressionSpecification) : colors[0],
+    ['boolean', ['feature-state', 'few'], false],
+    FEW,
+    NONE,
   ]
 }
 
-function popupContent(area: AreaValue, metric: Metric): HTMLElement {
-  // area names are data: build text nodes, never innerHTML
-  const node = document.createElement('div')
-  const title = document.createElement('strong')
-  title.textContent = area.name
-  node.append(title)
-  const lines = [
-    metric === 'mean'
-      ? `均价 ${formatMan(area.mean)}（中位 ${formatMan(area.median)}）`
-      : `单价均价 ${formatUnit(area.unitMean)}`,
-    `在售 ${formatCount(area.count)} 套 · 统计 ${formatCount(area.n)} 套`,
-  ]
-  if (area.n < MIN_SAMPLE) lines.push('样本少，仅供参考')
-  for (const text of lines) {
-    const line = document.createElement('div')
-    line.textContent = text
-    node.append(line)
-  }
-  return node
+const flag = (name: string): ExpressionSpecification => ['boolean', ['feature-state', name], false]
+
+export interface MapViewState {
+  zoom: number
+  bounds: BBox
+}
+
+export interface FocusRequest {
+  bbox: BBox
+  id: number
 }
 
 interface Props {
-  areas: AreaValue[]
+  areas: Areas
+  level: Level
+  table: DayTable | null
   metric: Metric
   breaks: number[]
+  minSample: number
   selected: string | null
+  focus: FocusRequest | null
   onSelect: (code: string | null) => void
+  onView: (view: MapViewState) => void
 }
 
-export function MapView({ areas, metric, breaks, selected, onSelect }: Props) {
+export function MapView({ areas, level, table, metric, breaks, minSample, selected, focus, onSelect, onView }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const [ready, setReady] = useState(false)
   // event handlers are bound once; read the latest props through refs
-  const latest = useRef({ areas, metric, onSelect })
-  latest.current = { areas, metric, onSelect }
+  const latest = useRef({ table, metric, level, minSample, onSelect, onView })
+  latest.current = { table, metric, level, minSample, onSelect, onView }
+  const hovered = useRef<{ source: Level; id: string } | null>(null)
 
   useEffect(() => {
     if (!container.current) return
@@ -120,7 +112,7 @@ export function MapView({ areas, metric, breaks, selected, onSelect }: Props) {
         'CooperativeGesturesHandler.MacHelpText': '按住 ⌘ 并滚动来缩放地图',
       },
       minZoom: 7,
-      maxZoom: 16,
+      maxZoom: 17,
       attributionControl: false,
       dragRotate: false,
       pitchWithRotate: false,
@@ -128,57 +120,120 @@ export function MapView({ areas, metric, breaks, selected, onSelect }: Props) {
     map.touchZoomRotate.disableRotation()
     map.addControl(new AttributionControl({ compact: false }), 'bottom-right')
     map.addControl(new NavigationControl({ showCompass: false }), 'top-right')
-    const popup = new Popup({ closeButton: false, closeOnClick: false, offset: 10 })
+    const popup = new Popup({ closeButton: false, closeOnClick: false, offset: 8, maxWidth: '260px' })
+
+    const report = () => {
+      const b = map.getBounds()
+      latest.current.onView({ zoom: map.getZoom(), bounds: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()] })
+    }
 
     map.on('load', () => {
-      map.addSource('areas', {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] },
-        attribution: GEO_ATTRIBUTION,
-      })
-      map.addLayer({
-        id: 'areas',
-        type: 'circle',
-        source: 'areas',
-        layout: { 'circle-sort-key': ['-', 0, ['get', 'count']] }, // small circles on top
-        paint: {
-          'circle-color': MISSING,
-          'circle-opacity': 0.88,
-          'circle-radius': radius(),
-          'circle-stroke-color': '#fcfcfb',
-          'circle-stroke-width': 1.2,
-        },
-      })
-      map.addLayer({
-        id: 'selected',
-        type: 'circle',
-        source: 'areas',
-        filter: ['==', ['get', 'code'], ''],
-        paint: {
-          'circle-color': 'rgba(0,0,0,0)',
-          'circle-radius': radius(3),
-          'circle-stroke-color': '#0b0b0b',
-          'circle-stroke-width': 2.5,
-        },
-      })
+      for (const lv of LEVELS) {
+        map.addSource(lv, {
+          type: 'geojson',
+          data: areas.features[lv],
+          promoteId: 'id',
+          attribution: BOUNDARY_ATTRIBUTION,
+        })
+        map.addLayer({
+          id: `fill-${lv}`,
+          type: 'fill',
+          source: lv,
+          paint: { 'fill-color': NONE, 'fill-opacity': 0.78 },
+        })
+        map.addLayer({
+          id: `line-${lv}`,
+          type: 'line',
+          source: lv,
+          paint: {
+            'line-color': '#fcfcfb',
+            'line-width': ['interpolate', ['linear'], ['zoom'], 9, 0.4, 14, 1.2],
+            'line-opacity': 0.9,
+          },
+        })
+        map.addLayer({
+          id: `hover-${lv}`,
+          type: 'line',
+          source: lv,
+          paint: { 'line-color': '#0b0b0b', 'line-width': 1.5, 'line-opacity': ['case', flag('hover'), 0.8, 0] },
+        })
+      }
+      // the selection outline shows at every zoom, above the fills of any level
+      for (const lv of LEVELS) {
+        map.addLayer({
+          id: `selected-${lv}`,
+          type: 'line',
+          source: lv,
+          paint: {
+            'line-color': '#0b0b0b',
+            'line-width': 3,
+            'line-opacity': ['case', flag('selected'), 1, 0],
+          },
+        })
+      }
       setReady(true)
+      report()
     })
+    map.on('moveend', report)
 
-    map.on('click', (event) => {
-      const [feature] = map.queryRenderedFeatures(event.point, { layers: ['areas'] })
-      latest.current.onSelect(feature ? String(feature.properties.code) : null)
-    })
-    map.on('mousemove', 'areas', (event) => {
-      const code = event.features?.[0]?.properties.code
-      const area = latest.current.areas.find((a) => a.code === code)
-      if (!area) return
-      map.getCanvas().style.cursor = 'pointer'
-      popup.setLngLat(event.lngLat).setDOMContent(popupContent(area, latest.current.metric)).addTo(map)
-    })
-    map.on('mouseleave', 'areas', () => {
+    const clearHover = () => {
+      if (hovered.current) map.setFeatureState(hovered.current, { hover: false })
+      hovered.current = null
       map.getCanvas().style.cursor = ''
       popup.remove()
+    }
+
+    const visibleFeature = (point: PointLike): MapGeoJSONFeature | undefined =>
+      map.queryRenderedFeatures(point, { layers: [`fill-${latest.current.level}`] })[0]
+
+    map.on('click', (event) => {
+      const feature = visibleFeature(event.point)
+      latest.current.onSelect(feature ? String(feature.id) : null)
     })
+    map.on('mousemove', (event) => {
+      const feature = visibleFeature(event.point)
+      const id = feature ? String(feature.id) : null
+      const source = latest.current.level
+      if (!id) return clearHover()
+      if (hovered.current?.id !== id) {
+        clearHover()
+        hovered.current = { source, id }
+        map.setFeatureState(hovered.current, { hover: true })
+      }
+      map.getCanvas().style.cursor = 'pointer'
+      popup.setLngLat(event.lngLat).setDOMContent(popupContent(id)).addTo(map)
+    })
+    map.getCanvas().addEventListener('mouseleave', clearHover)
+
+    function popupContent(code: string): HTMLElement {
+      // area names are data: build text nodes, never innerHTML
+      const { table, metric, minSample } = latest.current
+      const values = table?.get(code)
+      const node = document.createElement('div')
+      const title = document.createElement('strong')
+      title.textContent = displayName(code, areas.info)
+      node.append(title)
+      const lines: string[] = []
+      if (!values) {
+        lines.push('无在售房源')
+      } else {
+        const value = metricValue(values, metric.key)
+        lines.push(
+          value === null
+            ? `${metric.short}：样本不足（少于 ${minSample} 套）`
+            : `${metric.short}：${formatMetric(metric, value)}`,
+        )
+        if (metric.kind !== 'count') {
+          lines.push(`在售 ${formatCount(values.count)} 套 · 计入 ${formatCount(values[metric.sample])} 套`)
+        }
+      }
+      for (const text of lines) {
+        const line = document.createElement('div')
+        line.textContent = text
+        node.append(line)
+      }
+      return node
+    }
 
     mapRef.current = map
     return () => {
@@ -187,57 +242,72 @@ export function MapView({ areas, metric, breaks, selected, onSelect }: Props) {
       mapRef.current = null
       setReady(false)
     }
-  }, [])
+    // the geometry is loaded once before the map mounts
+  }, [areas])
+
+  // which level is drawn
+  useEffect(() => {
+    const map = mapRef.current
+    if (!ready || !map) return
+    for (const lv of LEVELS) {
+      const visibility = lv === level ? 'visible' : 'none'
+      for (const prefix of ['fill', 'line', 'hover']) map.setLayoutProperty(`${prefix}-${lv}`, 'visibility', visibility)
+    }
+    if (hovered.current && hovered.current.source !== level) {
+      map.setFeatureState(hovered.current, { hover: false })
+      hovered.current = null
+    }
+  }, [ready, level])
+
+  // values of the day as feature state
+  useEffect(() => {
+    const map = mapRef.current
+    if (!ready || !map) return
+    for (const lv of LEVELS) map.removeFeatureState({ source: lv })
+    if (table) {
+      for (const [code, values] of table) {
+        const lv = levelOf(code)
+        if (!lv) continue
+        const value = metricValue(values, metric.key)
+        map.setFeatureState({ source: lv, id: code }, { v: value ?? -1, few: value === null && values.count > 0 })
+      }
+    }
+    if (selected) {
+      const lv = levelOf(selected)
+      if (lv) map.setFeatureState({ source: lv, id: selected }, { selected: true })
+    }
+    if (hovered.current) map.setFeatureState(hovered.current, { hover: true })
+  }, [ready, table, metric, selected])
 
   useEffect(() => {
-    const source = mapRef.current?.getSource<GeoJSONSource>('areas')
-    if (!ready || !source) return
-    source.setData({
-      type: 'FeatureCollection',
-      features: areas.flatMap((area) =>
-        area.lat === null || area.lng === null
-          ? []
-          : [
-              {
-                type: 'Feature' as const,
-                geometry: { type: 'Point' as const, coordinates: [area.lng, area.lat] },
-                properties: {
-                  code: area.code,
-                  count: area.count ?? area.n,
-                  v: metricValue(area, metric) ?? -1,
-                },
-              },
-            ],
-      ),
-    })
-  }, [ready, areas, metric])
-
-  useEffect(() => {
-    if (ready) mapRef.current?.setPaintProperty('areas', 'circle-color', colorExpression(breaks))
+    if (!ready) return
+    for (const lv of LEVELS) mapRef.current?.setPaintProperty(`fill-${lv}`, 'fill-color', fillColor(breaks))
   }, [ready, breaks])
 
   useEffect(() => {
     const map = mapRef.current
-    if (!ready || !map) return
-    map.setFilter('selected', ['==', ['get', 'code'], selected ?? ''])
-    const area = areas.find((a) => a.code === selected)
-    if (area?.lat != null && area.lng != null) {
-      map.easeTo({ center: [area.lng, area.lat], zoom: Math.max(map.getZoom(), 10.5) })
-    }
-    // only when the selection changes, not when the category or metric does
-  }, [ready, selected])
+    if (!ready || !map || !focus) return
+    const [w, s, e, n] = focus.bbox
+    map.fitBounds(
+      [
+        [w, s],
+        [e, n],
+      ],
+      { padding: 60, maxZoom: 15, duration: 600 },
+    )
+  }, [ready, focus])
 
   return (
     <>
-      <div ref={container} className="map" role="region" aria-label="区域均价地图" />
-      <Legend metric={metric} breaks={breaks} />
+      <div ref={container} className="map" role="region" aria-label="区域价格地图" />
+      <Legend metric={metric} level={level} breaks={breaks} minSample={minSample} />
     </>
   )
 }
 
-function Legend({ metric, breaks }: { metric: Metric; breaks: number[] }) {
+function Legend({ metric, level, breaks, minSample }: { metric: Metric; level: Level; breaks: number[]; minSample: number }) {
   const colors = binColors(breaks.length + 1)
-  const fmt = metric === 'mean' ? formatManShort : (v: number) => `${Math.round(v)}`
+  const fmt = (v: number) => formatMetricShort(metric, v)
   const labels = colors.map((_, i) => {
     if (breaks.length === 0) return '全部'
     if (i === 0) return `< ${fmt(breaks[0])}`
@@ -246,7 +316,9 @@ function Legend({ metric, breaks }: { metric: Metric; breaks: number[] }) {
   })
   return (
     <div className="legend" aria-label="图例">
-      <div className="legend-title">{metric === 'mean' ? '均价（万円）' : '单价均价（万円/m²）'}</div>
+      <div className="legend-title">
+        {metric.short}（{metricUnit(metric)}）· {LEVEL_LABELS[level]}
+      </div>
       {/* compact strip on narrow screens */}
       <div className="legend-strip" aria-hidden="true">
         <div className="legend-ramp">
@@ -266,8 +338,18 @@ function Legend({ metric, breaks }: { metric: Metric; breaks: number[] }) {
             {labels[i]}
           </li>
         ))}
+        {metric.kind !== 'count' && (
+          <li>
+            <span className="swatch" style={{ background: FEW }} />
+            样本不足（少于 {minSample} 套）
+          </li>
+        )}
+        <li>
+          <span className="swatch empty" />
+          无在售房源
+        </li>
       </ul>
-      <div className="legend-note">圆点大小 = 在售套数</div>
+      <div className="legend-note">分档按最新一天的数据等分，切换日期时保持不变</div>
     </div>
   )
 }

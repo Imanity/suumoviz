@@ -1,11 +1,12 @@
 # SuumoViz
 
-每天采集一次东京都 SUUMO 在售房源（中古/新築マンション、新築/中古一戸建て）的列表页，按区域统计均价，
-在地图上展示。页面：<https://imanity.github.io/suumoviz/>
+每天采集一次东京都 SUUMO 在售房源（中古/新築マンション、新築/中古一戸建て）的列表页，按区域统计价格，
+在地图上分区着色展示（区市町村 → 町 → 丁目，随缩放切换），可以沿时间轴查看，点击区域看走势。
+页面：<https://imanity.github.io/suumoviz/>
 
 - 按 7 天轮转，每天只扫约 1/7 的列表页（约 100 页，每 5 秒 1 页），每 7 天覆盖全部房源一次；
 - 采集结果存放在本仓库的 `data` 分支，**逐行编码混淆**，不能直接阅读（`suumoviz decode` 可以还原，见下文）；
-- 网页只发布各区域的汇总数字（均价、中位价、单价均价、在售套数），不发布单条房源。
+- 网页只发布各区域每天的汇总数字（总价与单价的均价、中位数，在售套数），不发布单条房源；样本少于 3 套不显示价格。
 
 计划、设计与验收：[docs/plan.md](docs/plan.md)、[docs/design.md](docs/design.md)、[docs/acceptance.md](docs/acceptance.md)。
 
@@ -24,11 +25,12 @@ src/suumoviz/          Python 包：采集、合并、统计、编码、网页�
   store.py             data/ 下 CSV 表的读写（经过 codec）
   quality.py           质量门槛
   merge.py             合并、事件、下架判定、统计
-  geocode.py           区域代表点（国交省位置参照情報）
-  build.py             网页用的区域汇总 web/public/data/summary.dat
+  geocode.py           地址 → 町丁目（国交省位置参照情報）→ e-Stat 三级区域
+  build.py             网页用的按日期、按区域统计 web/public/data/
 tests/                 单元测试；fixtures/suumo/ 为编码后的页面样本
-tools/                 fixture 裁剪、町丁目数据转换
+tools/                 fixture 裁剪、町丁目数据转换、区域边界生成（make_boundaries.py）
 web/                   网页（Vite + React + MapLibre GL JS + 地理院タイル）
+  public/geo/areas.json  三级区域边界（e-Stat，TopoJSON，随仓库发布）
 docs/                  计划、设计、验收
 .github/workflows/     CI、每日采集、Pages 发布、试探
 ```
@@ -56,7 +58,7 @@ npm run dev
 ```bash
 git fetch origin data
 git worktree add data data                                      # 只需一次；之后 git -C data pull
-suumoviz build --data-dir data --out web/public/data            # 生成 summary.dat（已被 .gitignore 忽略）
+suumoviz build --data-dir data --out web/public/data            # 生成 index.dat、day/、history/（已被 .gitignore 忽略）
 ```
 
 ## 采集
@@ -90,6 +92,7 @@ suumoviz encode path/to/plain.csv                      # 就地编码（目录�
 ## 出典
 
 - 底图：[地理院タイル](https://maps.gsi.go.jp/development/ichiran.html)（淡色地図，国土地理院）
-- 区域代表点：「大字・町丁目レベル位置参照情報」国土交通省（令和7年，19.0b）を加工
+- 地址对照：「大字・町丁目レベル位置参照情報」国土交通省（令和7年，19.0b）を加工
+- 区域边界：「国勢調査 2020年 小地域（町丁・字等別）境界データ」総務省統計局（e-Stat）を加工
 - 房源：SUUMO 列表页；网页只展示按区域汇总的统计值
 - 地图库：[MapLibre GL JS](https://maplibre.org/)（BSD-3-Clause）

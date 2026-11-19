@@ -3,7 +3,9 @@ import pytest
 from suumoviz.geocode import Geocoder, kanji_number, split_chome
 
 
-def town(code: str, city: str, city_name: str, name: str, lat: float, lng: float) -> dict:
+def town(
+    code: str, city: str, city_name: str, name: str, lat: float, lng: float, estat: str = ""
+) -> dict:
     return {
         "town_code": code,
         "city_code": city,
@@ -11,15 +13,17 @@ def town(code: str, city: str, city_name: str, name: str, lat: float, lng: float
         "town_name": name,
         "lat": str(lat),
         "lng": str(lng),
+        "estat_code": estat,
     }
 
 
 ROWS = [
-    town("131010002001", "13101", "千代田区", "霞が関一丁目", 35.670, 139.750),
-    town("131010002003", "13101", "千代田区", "霞が関三丁目", 35.674, 139.746),
+    town("131010002001", "13101", "千代田区", "霞が関一丁目", 35.670, 139.750, "13101023001"),
+    town("131010002003", "13101", "千代田区", "霞が関三丁目", 35.674, 139.746, "13101023003"),
     town("131010001001", "13101", "千代田区", "内幸町一丁目", 35.671, 139.758),
     town("132090001000", "13209", "町田市", "本町田", 35.570, 139.440),
-    town("132090002001", "13209", "町田市", "本町一丁目", 35.540, 139.450),
+    town("132090002001", "13209", "町田市", "本町一丁目", 35.540, 139.450, "13209010001"),
+    town("132090002002", "13209", "町田市", "本町二丁目", 35.541, 139.451, "13209011002"),
     town("133030001000", "13303", "西多摩郡瑞穂町", "大字箱根ケ崎", 35.770, 139.350),
     town("133030002002", "13303", "西多摩郡瑞穂町", "南平二丁目", 35.760, 139.340),
     town("133050001000", "13305", "西多摩郡日の出町", "大字平井", 35.740, 139.260),
@@ -112,6 +116,19 @@ def test_area_code_fallback_and_groups(geo: Geocoder) -> None:
     assert geo.area_point("13420") is None  # no member municipality in this small table
 
 
+def test_area_codes(geo: Geocoder) -> None:
+    chome = geo.locate("東京都千代田区霞が関3-2-1", "13101")
+    assert geo.area_codes(chome) == ("13101", "131010230", "13101023003")
+    town = geo.locate("東京都千代田区霞が関", "13101")  # town centroid: chome unknown
+    assert geo.area_codes(town) == ("13101", "131010230", None)
+    split = geo.locate("東京都町田市本町", "13209")  # its chome lie in two e-Stat towns
+    assert geo.area_codes(split) == ("13209", None, None)
+    unmapped = geo.locate("東京都千代田区内幸町1", "13101")  # no estat_code
+    assert geo.area_codes(unmapped) == ("13101", None, None)
+    assert geo.area_codes(geo.locate(None, "13209")) == ("13209", None, None)
+    assert geo.area_codes(geo.locate(None, "13300")) == (None, None, None)  # SUUMO group
+
+
 def test_shipped_reference_data() -> None:
     geo = Geocoder.load()
     assert len(geo.cities) == 62
@@ -121,3 +138,4 @@ def test_shipped_reference_data() -> None:
     assert geo.locate("東京都西多摩郡瑞穂町大字箱根ケ崎", "13300").precision == "chome"
     for group in ("13300", "13360", "13380", "13400", "13420"):
         assert geo.area_point(group) is not None
+    assert geo.area_codes(kasumi) == ("13101", "131010050", "13101005003")

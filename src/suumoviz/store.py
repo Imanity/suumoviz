@@ -59,6 +59,20 @@ EVENT_FIELDS = [
     "price_min",
     "price_max",
 ]
+# What history needs of a listing pruned from listings/ (prices come from the events).
+ARCHIVE_FIELDS = [
+    "listing_id",
+    "category",
+    "area_code",
+    "address",
+    "price_min",
+    "price_max",
+    "area_min",
+    "area_max",
+    "first_seen",
+    "last_seen",
+    "delisted_on",
+]
 COUNT_FIELDS = ["date", "category", "area_code", "area_name", "count"]
 STAT_FIELDS = [
     "date",
@@ -119,6 +133,11 @@ def listings_path(data_dir: Path, category: str) -> Path:
 
 def events_path(data_dir: Path, day: str) -> Path:
     return data_dir / "events" / f"{day[:7]}.csv"
+
+
+def archive_path(data_dir: Path, day: str) -> Path:
+    """Listings pruned on ``day``."""
+    return data_dir / "archive" / f"{day[:4]}.csv"
 
 
 def counts_path(data_dir: Path, day: str) -> Path:

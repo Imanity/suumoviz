@@ -8,6 +8,9 @@ right after it. Each result carries a precision:
 - ``chome``: an exact 大字・町丁目 entry (a chome, or a town that has no chome);
 - ``town``:  the town matched but not its chome → mean of the town's chome points;
 - ``city``:  only the municipality matched → mean of all its town points.
+
+``area_codes`` turns a place into the map's areas (e-Stat 2020 census small areas, see
+``tools/make_boundaries.py``): municipality (5 digits), town (9) and chome or 字 (11).
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from dataclasses import dataclass, field
 from importlib import resources
 
 GEO_SOURCE = "「大字・町丁目レベル位置参照情報」国土交通省（令和7年 19.0b, 13000-19.0b.zip）を加工"
+BOUNDARY_SOURCE = "「国勢調査 2020年 小地域（町丁・字等別）境界データ」総務省統計局 e-Stat を加工"
 DATA_FILE = "geodata/tokyo_chome.csv"
 PRECISIONS = ("chome", "town", "city")
 
@@ -102,12 +106,18 @@ def _mean_place(pid: str, city: str, name: str, points: list[Place], precision: 
     return Place(pid, city, name, round(lat, 6), round(lng, 6), precision)
 
 
+AreaCodes = tuple[str | None, str | None, str | None]  # (city, town, chome)
+
+
 class Geocoder:
     def __init__(self, rows: Iterable[Mapping[str, str]]) -> None:
         towns: dict[str, dict[str, _Town]] = defaultdict(dict)
         points: dict[str, list[Place]] = defaultdict(list)
         city_names: dict[str, str] = {}
+        self._estat: dict[str, str] = {}  # 大字町丁目コード → e-Stat chome code
         for row in rows:
+            if row.get("estat_code"):
+                self._estat[row["town_code"]] = row["estat_code"]
             city, name = row["city_code"], row["town_name"]
             place = Place(
                 row["town_code"], city, name, float(row["lat"]), float(row["lng"]), "chome"
@@ -132,6 +142,12 @@ class Geocoder:
             for city, places in points.items()
         }
         self._towns = dict(towns)
+        self._town_ids = {
+            town.centroid.id: town
+            for by_name in towns.values()
+            for town in by_name.values()
+            if town.centroid is not None
+        }
         # longest name first, so "本町田" wins over "本町"
         self._town_keys = {
             city: sorted(by_name, key=len, reverse=True) for city, by_name in towns.items()
@@ -159,6 +175,23 @@ class Geocoder:
         if not members:
             return None
         return _mean_place(area_code, area_code, name or area_code, members, "city")
+
+    def area_codes(self, place: Place) -> AreaCodes:
+        """Map areas of ``place``: its municipality, and its town and chome when known.
+
+        A town-precision place gets the town only when all its chome are in one e-Stat town.
+        """
+        city = place.city_code if place.city_code in self.cities else None
+        if city is None:
+            return None, None, None
+        if place.precision == "chome":
+            code = self._estat.get(place.id)
+            return (city, code[:9], code) if code else (city, None, None)
+        if place.precision == "town" and (town := self._town_ids.get(place.id)):
+            codes = {self._estat.get(p.id, "")[:9] for p in town.chome.values()}
+            if len(codes) == 1 and (code := codes.pop()):
+                return city, code, None
+        return city, None, None
 
     def locate(self, address: str | None, area_code: str = "") -> Place | None:
         """Best point for ``address``; ``area_code`` is the fallback municipality."""

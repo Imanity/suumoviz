@@ -31,7 +31,7 @@ function contentSecurityPolicy(): Plugin {
   }
 }
 
-// public/data/summary.dat comes from `suumoviz build` (the Pages workflow runs it before
+// public/data/ comes from `suumoviz build` (the Pages workflow runs it before
 // `vite build`; locally: `suumoviz build --data-dir data --out web/public/data`).
 export default defineConfig(({ command, isPreview }) => ({
   // GitHub Pages serves the project at https://imanity.github.io/suumoviz/

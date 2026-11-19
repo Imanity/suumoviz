@@ -1,71 +1,93 @@
-import { useEffect, useRef } from 'react'
-import { formatCount, formatMan, formatUnit } from '../format'
-import { type AreaValue, type Metric, metricValue, MIN_SAMPLE } from '../summary'
+import type { Metric, Ranked } from '../data'
+import { formatCount, formatMetric } from '../format'
+import { type AreaInfo, pathNames } from '../geo'
+
+const MAX_ROWS = 150
 
 interface Props {
-  areas: AreaValue[] // already ranked
+  rows: Ranked[] // already ranked
   metric: Metric
+  info: Map<string, AreaInfo>
   selected: string | null
   onSelect: (code: string | null) => void
 }
 
-export function RankList({ areas, metric, selected, onSelect }: Props) {
-  const body = useRef<HTMLTableSectionElement>(null)
-  const max = Math.max(0, ...areas.map((a) => metricValue(a, metric) ?? 0))
-  const format = metric === 'mean' ? formatMan : formatUnit
+export function RankList({ rows, metric, info, selected, onSelect }: Props) {
+  const shown = rows.slice(0, MAX_ROWS)
+  const max = Math.max(0, ...shown.map((r) => r.value ?? 0))
 
-  // keep the selected row visible when it was picked on the map
-  useEffect(() => {
-    if (!selected) return
-    body.current
-      ?.querySelector<HTMLElement>(`[data-code="${selected}"]`)
-      ?.scrollIntoView({ block: 'nearest' })
-  }, [selected])
+  if (rows.length === 0) return <p className="muted small">地图范围内没有在售房源。</p>
 
   return (
-    <table className="ranking">
-      <caption className="sr-only">各区域{metric === 'mean' ? '均价' : '单价均价'}排行</caption>
-      <thead>
-        <tr>
-          <th scope="col" className="num">#</th>
-          <th scope="col">区域</th>
-          <th scope="col">{metric === 'mean' ? '均价' : '单价均价'}</th>
-          <th scope="col" className="num">在售</th>
-        </tr>
-      </thead>
-      <tbody ref={body}>
-        {areas.map((area, i) => {
-          const value = metricValue(area, metric)
-          const few = area.n < MIN_SAMPLE
-          return (
-            <tr
-              key={area.code}
-              data-code={area.code}
-              className={`${area.code === selected ? 'selected' : ''}${few ? ' few' : ''}`}
-              aria-selected={area.code === selected}
-              tabIndex={0}
-              onClick={() => onSelect(area.code === selected ? null : area.code)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  onSelect(area.code === selected ? null : area.code)
-                }
-              }}
-            >
-              <td className="num muted">{value === null ? '' : i + 1}</td>
-              <td>
-                {area.name}
-                {few && <span className="tag" title={`只有 ${area.n} 套房源有价格`}>样本少</span>}
-              </td>
-              <td className="value">
-                <span className="bar" style={{ width: value === null || !max ? 0 : `${(value / max) * 100}%` }} />
-                <span className="num">{format(value)}</span>
-              </td>
-              <td className="num">{formatCount(area.count)}</td>
-            </tr>
-          )
-        })}
-      </tbody>
-    </table>
+    <>
+      <table className="ranking">
+        <caption className="sr-only">地图范围内各区域{metric.short}排行</caption>
+        <thead>
+          <tr>
+            <th scope="col" className="num">
+              #
+            </th>
+            <th scope="col">区域</th>
+            <th scope="col">{metric.short}</th>
+            {metric.kind !== 'count' && (
+              <th scope="col" className="num">
+                在售
+              </th>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((row, i) => {
+            const few = row.value === null
+            return (
+              <tr
+                key={row.code}
+                data-code={row.code}
+                className={`${row.code === selected ? 'selected' : ''}${few ? ' few' : ''}`}
+                aria-selected={row.code === selected}
+                tabIndex={0}
+                onClick={() => onSelect(row.code === selected ? null : row.code)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onSelect(row.code === selected ? null : row.code)
+                  }
+                }}
+              >
+                <td className="num muted">{few ? '' : i + 1}</td>
+                <td>
+                  <AreaName code={row.code} info={info} />
+                </td>
+                <td className="value">
+                  <span
+                    className="bar"
+                    style={{ width: row.value === null || !max ? 0 : `${(row.value / max) * 100}%` }}
+                  />
+                  <span className="num">{few ? '样本不足' : formatMetric(metric, row.value)}</span>
+                </td>
+                {metric.kind !== 'count' && <td className="num">{formatCount(row.values.count)}</td>}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      {rows.length > MAX_ROWS && (
+        <p className="muted small">
+          共 {formatCount(rows.length)} 个区域，只列出前 {MAX_ROWS} 个；放大地图可缩小范围。
+        </p>
+      )}
+    </>
+  )
+}
+
+/** "南烏山一丁目" with its municipality in small print. */
+function AreaName({ code, info }: { code: string; info: Map<string, AreaInfo> }) {
+  const names = pathNames(code, info)
+  const own = names[names.length - 1] ?? code
+  return (
+    <>
+      {names.length > 1 && <span className="area-city">{names[0]}</span>}
+      {own}
+    </>
   )
 }

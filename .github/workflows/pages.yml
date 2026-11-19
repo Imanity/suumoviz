@@ -1,6 +1,6 @@
 name: Pages
 
-# Builds the area summary from the `data` branch, builds the web page and publishes both
+# Builds the area statistics from the `data` branch, builds the web page and publishes both
 # to GitHub Pages. Runs on pushes to main, by hand, and after every daily crawl.
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
 
       - run: python -m pip install .
 
-      - name: Build the area summary
+      - name: Build the area statistics
         run: suumoviz build --data-dir data --out web/public/data
 
       - uses: actions/setup-node@v4
@@ -50,12 +50,18 @@ jobs:
       - run: npm run build
         working-directory: web
 
-      # Only the page and the obfuscated area summary may be published.
+      # Only the page, the area boundaries (public e-Stat data) and the obfuscated area
+      # statistics may be published.
       - name: Check the published files
         working-directory: web/dist
         run: |
-          test "$(head -n 1 data/summary.dat)" = "#suumoviz-obf/1"
-          extra=$(find . -type f ! -path './assets/*' ! -path ./index.html ! -path ./data/summary.dat)
+          test -f data/index.dat && test -f geo/areas.json
+          plain=$(find data -type f | while read -r f; do
+            [ "$(head -n 1 "$f")" = "#suumoviz-obf/1" ] || echo "$f"
+          done)
+          if [ -n "$plain" ]; then echo "not obfuscated: $plain"; exit 1; fi
+          extra=$(find . -type f ! -path './assets/*' ! -path ./index.html \
+            ! -path ./geo/areas.json ! -path './data/*.dat')
           if [ -n "$extra" ]; then echo "unexpected files in dist: $extra"; exit 1; fi
 
       - uses: actions/upload-pages-artifact@v3
