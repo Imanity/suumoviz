@@ -16,7 +16,6 @@ import { type Areas, type BBox, displayName } from '../geo'
 
 // Sequential blue, light → dark (steps 100…700): a choropleth may use the full range.
 export const RAMP = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b']
-const FEW = '#b4b3ab' // listings on sale, too few behind a price
 const NONE = 'rgba(0,0,0,0)'
 
 const GSI_ATTRIBUTION =
@@ -49,14 +48,8 @@ function fillColor(breaks: number[]): ExpressionSpecification {
   const value: ExpressionSpecification = ['to-number', ['feature-state', 'v'], -1]
   const step: unknown[] = ['step', value, colors[0]]
   breaks.forEach((b, i) => step.push(b, colors[i + 1]))
-  return [
-    'case',
-    ['>=', value, 0],
-    breaks.length ? (step as ExpressionSpecification) : colors[0],
-    ['boolean', ['feature-state', 'few'], false],
-    FEW,
-    NONE,
-  ]
+  // too few listings or none: no fill, the base map shows through
+  return ['case', ['>=', value, 0], breaks.length ? (step as ExpressionSpecification) : colors[0], NONE]
 }
 
 const flag = (name: string): ExpressionSpecification => ['boolean', ['feature-state', name], false]
@@ -269,7 +262,7 @@ export function MapView({ areas, level, table, metric, breaks, minSample, select
         const lv = levelOf(code)
         if (!lv) continue
         const value = metricValue(values, metric.key)
-        map.setFeatureState({ source: lv, id: code }, { v: value ?? -1, few: value === null && values.count > 0 })
+        map.setFeatureState({ source: lv, id: code }, { v: value ?? -1 })
       }
     }
     if (selected) {
@@ -338,15 +331,9 @@ function Legend({ metric, level, breaks, minSample }: { metric: Metric; level: L
             {labels[i]}
           </li>
         ))}
-        {metric.kind !== 'count' && (
-          <li>
-            <span className="swatch" style={{ background: FEW }} />
-            样本不足（少于 {minSample} 套）
-          </li>
-        )}
         <li>
           <span className="swatch empty" />
-          无在售房源
+          {metric.kind === 'count' ? '无在售房源' : `无在售房源或少于 ${minSample} 套`}
         </li>
       </ul>
       <div className="legend-note">分档按最新一天的数据等分，切换日期时保持不变</div>
