@@ -1,48 +1,73 @@
-name: Deploy to GitHub Pages
+name: Pages
 
+# Builds the area summary from the `data` branch, builds the web page and publishes both
+# to GitHub Pages. Runs on pushes to main, by hand, and after every daily crawl.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
-concurrency:
-  group: pages
-  cancel-in-progress: true
-
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check out the data branch into ./data
+        uses: actions/checkout@v4
+        with:
+          ref: data
+          path: data
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - run: python -m pip install .
+
+      - name: Build the area summary
+        run: suumoviz build --data-dir data --out web/public/data
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - run: npm ci
+        working-directory: web
       - run: npm test
+        working-directory: web
       - run: npm run build
+        working-directory: web
 
-      # The site is public: it must contain code only, never data.
-      - name: Check that no data is published
+      # Only the page and the obfuscated area summary may be published.
+      - name: Check the published files
+        working-directory: web/dist
         run: |
-          test ! -e dist/data
-          if grep -rlE '"listing_id"|"fields":\[' dist; then echo "data found in dist"; exit 1; fi
+          test "$(head -n 1 data/summary.dat)" = "#suumoviz-obf/1"
+          extra=$(find . -type f ! -path './assets/*' ! -path ./index.html ! -path ./data/summary.dat)
+          if [ -n "$extra" ]; then echo "unexpected files in dist: $extra"; exit 1; fi
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: web/dist
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    concurrency:
+      group: pages-deploy
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

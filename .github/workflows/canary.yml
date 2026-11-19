@@ -1,0 +1,38 @@
+name: Canary
+
+# Manual probe from a GitHub-hosted runner: robots.txt + 4 city pages + 1 list page
+# (6 requests). Uses throwaway directories; nothing is committed.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - run: python -m pip install .
+
+      - name: Probe SUUMO
+        run: >-
+          suumoviz crawl --max-pages 1
+          --data-dir "$RUNNER_TEMP/canary-data"
+          --work-dir "$RUNNER_TEMP/canary-work"
+
+      - name: Show run summary and page status
+        if: always()
+        run: |
+          cat "$RUNNER_TEMP"/canary-work/*/run.json || true
+          for f in "$RUNNER_TEMP"/canary-work/*/pages.csv; do
+            suumoviz decode "$f" | cut -d, -f2-9 || true
+          done

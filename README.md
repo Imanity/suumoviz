@@ -1,54 +1,95 @@
-# SuumoViz（地图前端）
+# SuumoViz
 
-东京都 SUUMO 在售房源的地图与趋势页面。页面部署在 GitHub Pages：<https://imanity.github.io/suumoviz/>
+每天采集一次东京都 SUUMO 在售房源（中古/新築マンション、新築/中古一戸建て）的列表页，按区域统计均价，
+在地图上展示。页面：<https://imanity.github.io/suumoviz/>
 
-**本仓库只有前端代码，不含任何房源数据。** 数据由私有仓库 `Imanity/suumoviz-data` 每天采集并生成，
-保存在该仓库的 `site` 分支；页面在浏览器里用访问者自己的只读 Token 通过 GitHub API 读取，
-不经过其他服务器。没有 Token 的访问者只能看到登录框。
+- 按 7 天轮转，每天只扫约 1/7 的列表页（约 100 页，每 5 秒 1 页），每 7 天覆盖全部房源一次；
+- 采集结果存放在本仓库的 `data` 分支，**逐行编码混淆**，不能直接阅读（`suumoviz decode` 可以还原，见下文）；
+- 网页只发布各区域的汇总数字（均价、中位价、单价均价、在售套数），不发布单条房源。
 
-## 使用
+计划、设计与验收：[docs/plan.md](docs/plan.md)、[docs/design.md](docs/design.md)、[docs/acceptance.md](docs/acceptance.md)。
 
-1. 创建一个 [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)：
-   - Repository access：Only select repositories → 只选数据仓库；
-   - Permissions → Repository permissions → **Contents: Read-only**（其他保持默认）；
-   - 设有效期（例如 90 天）。
-2. 打开页面，填入数据仓库名与 Token。默认只保存到关闭标签页为止；勾选“在这台设备上记住”才写入浏览器存储。
+## 目录
 
-功能：按类别（中古/新築マンション、新築/中古一戸建て）、价格、面积筛选；地图按町丁目聚合
-（圆点大小 = 套数，颜色 = 中位价格或单价）；点击圆点查看房源并跳转 SUUMO 详情；
-按区查看在售件数、价格中位数（P25–P75）、单价、每日新挂牌的趋势。
+```text
+src/suumoviz/          Python 包：采集、合并、统计、编码、网页数据
+  categories.py        类别与 URL
+  parse/               区汇总页、列表页解析与文本规范化
+  robots.py            robots.txt 匹配（支持通配符）
+  fetch.py             限速抓取与停机规则
+  rotation.py          7 天轮转
+  state.py             偏移量与冷却状态（state.json，明文）
+  crawl.py / cli.py    一次运行的编排与命令行
+  codec.py             数据文件的编码混淆
+  store.py             data/ 下 CSV 表的读写（经过 codec）
+  quality.py           质量门槛
+  merge.py             合并、事件、下架判定、统计
+  geocode.py           区域代表点（国交省位置参照情報）
+  build.py             网页用的区域汇总 web/public/data/summary.dat
+tests/                 单元测试；fixtures/suumo/ 为编码后的页面样本
+tools/                 fixture 裁剪、町丁目数据转换
+web/                   网页（Vite + React + MapLibre GL JS + 地理院タイル）
+docs/                  计划、设计、验收
+.github/workflows/     CI、每日采集、Pages 发布、试探
+```
 
 ## 开发
 
-需要 Node.js 22+。
+需要 Python 3.12 和 Node.js 22+。
 
 ```bash
-npm ci
-# 用数据仓库生成本地数据（public/data/ 已被 .gitignore 忽略，绝不提交）
-(cd ../suumoviz-data && suumoviz build --data-dir data --out ../suumoviz/public/data)
-npm run dev        # 开发模式直接读 public/data/，不需要 Token
-npm test           # 单元测试（vitest）
-npm run build      # 类型检查 + 生产构建（不复制 public/，产物中没有数据）
+python -m venv .venv
+.venv/Scripts/python -m pip install -e ".[dev]"   # Linux/macOS: .venv/bin/python
+.venv/Scripts/ruff check .
+.venv/Scripts/python -m pytest                     # 完全离线
 ```
 
-`VITE_LOCAL_DATA=1 npm run build` 可以生成读取本地数据的构建，用于 `npm run preview` 验证；
-生产构建默认读取 GitHub。
+```bash
+cd web
+npm ci
+npm test
+npm run dev
+```
 
-## 部署
+本地看页面需要先取数据：
 
-推送到 `main` 后，`.github/workflows/pages.yml` 运行测试、构建，确认 `dist/` 中没有数据，
-然后发布到 GitHub Pages。
+```bash
+git fetch origin data
+git worktree add data data                                      # 只需一次；之后 git -C data pull
+suumoviz build --data-dir data --out web/public/data            # 生成 summary.dat（已被 .gitignore 忽略）
+```
 
-## 安全
+## 采集
 
-- 页面只运行自身打包的脚本；Content-Security-Policy 只允许连接 `api.github.com` 和地理院タイル；
-- Token 只发给 `api.github.com`；同一账号的其他 Pages 站点与本页同源，因此“记住”默认关闭；
-- Token 泄露的影响限于读取数据仓库，可随时在 GitHub 上撤销；
-- 页面设置了 `noindex`。
+```bash
+suumoviz crawl --dry-run --city-html tests/fixtures/suumo   # 不联网，只看今天的计划
+suumoviz crawl --dry-run                                     # 联网 5 个请求，用当日件数看计划
+suumoviz crawl --max-pages 5                                 # 试运行：只抓 5 个列表页
+suumoviz daily                                               # 抓今天槽位的全部页面并合并进 data/
+```
+
+请求间隔固定不少于 5 秒；遇到 403/429/验证码会停止并冷却 24 小时（7 天内再次触发为 72 小时）。
+线上由 GitHub Actions 每天日本时间 03:17 运行（GitHub 的定时任务经常延迟几个小时），
+完成后提交 `data` 分支并重新发布 Pages。
+
+## 数据编码
+
+`data/` 下的 CSV 表、每日快照 `work/` 和测试样本都以 `#suumoviz-obf/1` 开头：之后每行是原文一行与固定密钥
+异或后的 base64。**这只是混淆，不是加密**：密钥就在代码里（`src/suumoviz/codec.py`、`web/src/codec.ts`），
+目的只是让数据不能被直接阅读、搜索或被搜索引擎收录。按行编码使未变化的行保持不变，`data` 分支每天的差异
+和明文 CSV 一样小。
+
+```bash
+suumoviz decode data/listings/used_condo.csv | head   # 查看明文
+suumoviz encode path/to/plain.csv                      # 就地编码（目录：其中所有 *.csv）
+```
+
+读取时自动识别：明文文件照常可读，下次写入时变为编码格式。`state.json` 和 `work/*/run.json`
+只有运行状态，保持明文。
 
 ## 出典
 
 - 底图：[地理院タイル](https://maps.gsi.go.jp/development/ichiran.html)（淡色地図，国土地理院）
-- 町丁目坐标：「大字・町丁目レベル位置参照情報」国土交通省（令和7年，19.0b）を加工
-- 房源：SUUMO 列表页，仅供个人分析，不公开、不转载
+- 区域代表点：「大字・町丁目レベル位置参照情報」国土交通省（令和7年，19.0b）を加工
+- 房源：SUUMO 列表页；网页只展示按区域汇总的统计值
 - 地图库：[MapLibre GL JS](https://maplibre.org/)（BSD-3-Clause）

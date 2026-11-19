@@ -1,7 +1,42 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+htmlcov/
+.coverage
+
+# Node
 node_modules/
 dist/
 dist-local/
-# private data for local development (suumoviz build --out public/data); never commit
-public/data/
-*.local
-.env*
+coverage/
+*.tsbuildinfo
+
+# IDE and OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
+
+# Runtime
+logs/
+tmp/
+*.pid
+
+# Crawler output: data/ lives on the `data` branch, work/ is per-run scratch
+/data/
+/work/
+# suumoviz build output (the Pages workflow generates it before `vite build`)
+**/public/data/
