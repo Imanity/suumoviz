@@ -198,12 +198,12 @@
   "cooldown_until": null,
   "cooldown_reason": null,
   "blocks": [],
-  "robots_sha256": "9303fdf4880f9cf93f822cdd28c2064faf18b4ed71d80ecb6589882dc08bfbbd",
+  "robots_sha256": "0977a6f6e668fcebc11ee79446e37a58c682a5b1d2233ea63107611b4ca7bec3",
   "last_run": {
-    "date": "2026-11-19",
+    "date": "2026-11-20",
     "status": "completed",
     "stop_reason": null,
-    "requests": 105,
-    "listings": 8642
+    "requests": 108,
+    "listings": 8583
   }
 }
