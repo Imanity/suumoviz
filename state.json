@@ -200,10 +200,10 @@
   "blocks": [],
   "robots_sha256": "0977a6f6e668fcebc11ee79446e37a58c682a5b1d2233ea63107611b4ca7bec3",
   "last_run": {
-    "date": "2026-11-27",
+    "date": "2026-11-28",
     "status": "completed",
     "stop_reason": null,
-    "requests": 108,
-    "listings": 8708
+    "requests": 107,
+    "listings": 8689
   }
 }
